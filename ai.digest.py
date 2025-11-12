@@ -127,24 +127,25 @@ FILTERING RULES:
         )
     }
 
-    response = client.responses.create(
-        model="gpt-5-mini",
-        input=[
-            {"role": "system", "content": system_prompt},
-            user_prompt
-        ],
-        response_format={
-            "type": "json"
-        }
-    )
+    response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt["content"]}
+    ]
+)
 
-    raw = response.output[0].content[0].text  # SDK aggregates text output
+raw = response.choices[0].message.content
+
+
     try:
-        data = json.loads(raw)
-        return data[:6]
-    except Exception:
-        # Fallback: no valid JSON, return empty
-        return []
+    data = json.loads(raw)
+    return data[:6]
+except Exception:
+    print("⚠️ Could not parse JSON output from model. Raw output:")
+    print(raw)
+    return []
+
 
 
 def build_email_html(curated):
