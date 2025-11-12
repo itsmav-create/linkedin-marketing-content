@@ -31,4 +31,4 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
         run: |
-          python ai_digest.py
+          python linkedin-marketing-content/ai.digest.py
