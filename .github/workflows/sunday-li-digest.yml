@@ -24,11 +24,13 @@ jobs:
         run: |
           pip install openai feedparser python-dateutil
 
-      - name: Run digest script
+           - name: Run digest script
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
         run: |
-          python linkedin-marketing-content/ai.digest.py
+          ls
+          python ai.digest.py
+
