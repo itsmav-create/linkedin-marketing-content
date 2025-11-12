@@ -1,48 +1,47 @@
+# ai.digest.py
+# Sends a Sunday-night LinkedIn content pack via email.
+# Uses OpenAI (chat completions), RSS feeds, and SMTP.
+
 import os
-import feedparser
-from datetime import datetime, timedelta, timezone
-from dateutil import parser as dateparser
-from email.mime.text import MIMEText
-import smtplib
 import json
+import smtplib
+from email.mime.text import MIMEText
+from datetime import datetime, timedelta, timezone
+
+import feedparser
+from dateutil import parser as dateparser
 from openai import OpenAI
 
 # ========= CONFIG =========
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Email settings (use an app password / SMTP relay)
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
 SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-RECIPIENT_EMAIL = "YOUR_EMAIL_HERE"   # where you want the pack
+RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL", "your@email.com")
 
-# Core sources – add/remove as you like
 RSS_FEEDS = [
-    # Harvard Business Review
     "https://feeds.hbr.org/harvardbusiness",
-    # McKinsey Insights (all)
     "https://www.mckinsey.com/insights/rss",
-    # Marketing Week – latest news
     "http://www.marketingweek.co.uk/include/qbe/rss_latest_news.xml",
 ]
 
-# Lookback window for "current"
 LOOKBACK_DAYS = 14
 
-# ========= CORE LOGIC =========
-
+# ========= OPENAI CLIENT =========
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+
 def fetch_recent_articles():
+    """Fetch recent articles within LOOKBACK_DAYS from the RSS feeds."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)
     articles = []
 
     for feed_url in RSS_FEEDS:
         feed = feedparser.parse(feed_url)
         for entry in feed.entries:
-            # Try to parse published date; if missing, skip
             published = None
             for key in ("published", "updated", "created"):
                 if key in entry:
@@ -54,18 +53,15 @@ def fetch_recent_articles():
 
             if not published:
                 continue
-
-            # Normalise to UTC if naive
             if not published.tzinfo:
                 published = published.replace(tzinfo=timezone.utc)
-
             if published < cutoff:
                 continue
 
             articles.append({
                 "title": entry.get("title", "").strip(),
                 "url": entry.get("link", "").strip(),
-                "summary": entry.get("summary", "")[:400],
+                "summary": entry.get("summary", "")[:500],
                 "published": published.isoformat()
             })
 
@@ -74,12 +70,9 @@ def fetch_recent_articles():
 
 def select_and_enrich_articles(articles):
     """
-    Ask the model to:
-    - pick the best 5–6 for YOUR positioning
-    - generate hooks + short posts for LinkedIn
-    Returns a Python list of dicts.
+    Use OpenAI to pick the best 5–6 articles and generate hooks + short posts.
+    Returns a list[dict].
     """
-
     if not articles:
         return []
 
@@ -105,9 +98,8 @@ FILTERING RULES:
   - Operating models, org design, transformation
 - Exclude junior how-tos, clickbait, generic AI hype, or deep infra with no C-level angle.
 - Tone: edgy, clear, commercially grounded, no fluff.
-"""
+""".strip()
 
-    # Build the user content as a plain string for the Chat Completions API
     user_content = (
         "From the following recent articles, select the 5–6 that best fit the rules. "
         "For each selected article, return JSON ONLY with this schema:\n"
@@ -125,91 +117,23 @@ FILTERING RULES:
         f"ARTICLES:\n{json.dumps(articles[:60])}"
     )
 
-    # Use the stable Chat Completions API that is available in the default OpenAI SDK
-    response = client.chat.completions.create(
+    resp = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content}
+            {"role": "user", "content": user_content},
         ],
-        temperature=0.2
+        temperature=0.2,
     )
 
-    raw = response.choices[0].message.content
-
+    raw = resp.choices[0].message.content
     try:
         data = json.loads(raw)
         return data[:6]
     except Exception:
-        # Emit the raw text to the GitHub Actions log to help debug if needed
         print("⚠️ Could not parse JSON from model. Raw output follows:")
         print(raw)
         return []
-
-
-    system_prompt = """
-You are an AI Content Strategist for Marmik Vyas.
-
-Marmik is a 24+ year senior marketing & commercial leader:
-- Ex Ogilvy, Prudential ICICI AMC, Dell, Lenovo, nbn, ALAT (sovereign-backed tech manufacturing).
-- Credibility pillars: marketing transformation, GTM & demand, martech & AI, performance & ROI, exec/board alignment, P&L thinking.
-
-AUDIENCE:
-- CEOs/Founders/Commercial leaders (ANZ, APAC, Middle East)
-- CMOs & Marketing/Growth leaders
-- PE/VC & investors
-- Senior Product/Digital/CX leaders
-
-FILTERING RULES:
-- Only pick articles that help senior leaders think sharper about:
-  - Marketing effectiveness & ROI
-  - GTM and demand strategy
-  - AI in marketing & growth
-  - Customer experience & retention
-  - Operating models, org design, transformation
-- Exclude junior how-tos, clickbait, generic AI hype, or deep infra with no C-level angle.
-- Tone: edgy, clear, commercially grounded, no fluff.
-"""
-
-    user_prompt = {
-        "role": "user",
-        "content": (
-            "From the following recent articles, select the 5–6 that best fit the rules. "
-            "For each selected article, return JSON ONLY with this schema:\n"
-            "[\n"
-            "  {\n"
-            "    \"title\": \"...\",\n"
-            "    \"url\": \"...\",\n"
-            "    \"published\": \"ISO8601\",\n"
-            "    \"primary_audience\": \"CEOs | CMOs | Investors | Product/Digital/CX | Multiple\",\n"
-            "    \"why_it_matters\": \"Max 2 sentences, business impact only.\",\n"
-            "    \"hook\": \"Max 22-word scroll-stopping opening line.\",\n"
-            "    \"li_post\": \"80-140 word post in Marmik's voice: tension → insight → sharp POV → question. No hashtags, no emojis.\"\n"
-            "  }\n"
-            "]\n\n"
-            f"ARTICLES:\n{json.dumps(articles[:60])}"  # cap for token sanity
-        )
-    }
-
-    response = client.chat.completions.create(
-    model="gpt-4o-mini",
-    messages=[
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt["content"]}
-    ]
-)
-
-raw = response.choices[0].message.content
-
-
-    try:
-    data = json.loads(raw)
-    return data[:6]
-except Exception:
-    print("⚠️ Could not parse JSON output from model. Raw output:")
-    print(raw)
-    return []
-
 
 
 def build_email_html(curated):
@@ -229,14 +153,14 @@ def build_email_html(curated):
         rows.append(f"""
         <tr>
           <td style="vertical-align:top; padding:12px 8px; border-bottom:1px solid #eee;">
-            <strong>{i}. {item['title']}</strong><br>
-            <a href="{item['url']}">{item['url']}</a><br>
-            <em>Audience:</em> {item['primary_audience']}<br>
-            <em>Why it matters:</em> {item['why_it_matters']}<br><br>
+            <strong>{i}. {item.get('title','')}</strong><br>
+            <a href="{item.get('url','')}">{item.get('url','')}</a><br>
+            <em>Audience:</em> {item.get('primary_audience','')}<br>
+            <em>Why it matters:</em> {item.get('why_it_matters','')}<br><br>
             <strong>Hook:</strong><br>
-            {item['hook']}<br><br>
+            {item.get('hook','')}<br><br>
             <strong>Draft post:</strong><br>
-            {item['li_post']}
+            {item.get('li_post','')}
           </td>
         </tr>
         """)
@@ -266,8 +190,17 @@ def send_email(subject, html_body):
         server.login(SMTP_USER, SMTP_PASSWORD)
         server.send_message(msg)
 
+    print("✅ Email sent to", RECIPIENT_EMAIL)
+
 
 def main():
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY not set")
+    if not SMTP_USER or not SMTP_PASSWORD:
+        raise RuntimeError("SMTP_USER/SMTP_PASSWORD not set in secrets")
+    if not RECIPIENT_EMAIL:
+        raise RuntimeError("RECIPIENT_EMAIL not set in secrets")
+
     articles = fetch_recent_articles()
     curated = select_and_enrich_articles(articles)
     html = build_email_html(curated)
@@ -276,4 +209,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
