@@ -107,6 +107,70 @@ FILTERING RULES:
 - Tone: edgy, clear, commercially grounded, no fluff.
 """
 
+    # Build the user content as a plain string for the Chat Completions API
+    user_content = (
+        "From the following recent articles, select the 5–6 that best fit the rules. "
+        "For each selected article, return JSON ONLY with this schema:\n"
+        "[\n"
+        "  {\n"
+        "    \"title\": \"...\",\n"
+        "    \"url\": \"...\",\n"
+        "    \"published\": \"ISO8601\",\n"
+        "    \"primary_audience\": \"CEOs | CMOs | Investors | Product/Digital/CX | Multiple\",\n"
+        "    \"why_it_matters\": \"Max 2 sentences, business impact only.\",\n"
+        "    \"hook\": \"Max 22-word scroll-stopping opening line.\",\n"
+        "    \"li_post\": \"80-140 word post in Marmik's voice: tension → insight → sharp POV → question. No hashtags, no emojis.\"\n"
+        "  }\n"
+        "]\n\n"
+        f"ARTICLES:\n{json.dumps(articles[:60])}"
+    )
+
+    # Use the stable Chat Completions API that is available in the default OpenAI SDK
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ],
+        temperature=0.2
+    )
+
+    raw = response.choices[0].message.content
+
+    try:
+        data = json.loads(raw)
+        return data[:6]
+    except Exception:
+        # Emit the raw text to the GitHub Actions log to help debug if needed
+        print("⚠️ Could not parse JSON from model. Raw output follows:")
+        print(raw)
+        return []
+
+
+    system_prompt = """
+You are an AI Content Strategist for Marmik Vyas.
+
+Marmik is a 24+ year senior marketing & commercial leader:
+- Ex Ogilvy, Prudential ICICI AMC, Dell, Lenovo, nbn, ALAT (sovereign-backed tech manufacturing).
+- Credibility pillars: marketing transformation, GTM & demand, martech & AI, performance & ROI, exec/board alignment, P&L thinking.
+
+AUDIENCE:
+- CEOs/Founders/Commercial leaders (ANZ, APAC, Middle East)
+- CMOs & Marketing/Growth leaders
+- PE/VC & investors
+- Senior Product/Digital/CX leaders
+
+FILTERING RULES:
+- Only pick articles that help senior leaders think sharper about:
+  - Marketing effectiveness & ROI
+  - GTM and demand strategy
+  - AI in marketing & growth
+  - Customer experience & retention
+  - Operating models, org design, transformation
+- Exclude junior how-tos, clickbait, generic AI hype, or deep infra with no C-level angle.
+- Tone: edgy, clear, commercially grounded, no fluff.
+"""
+
     user_prompt = {
         "role": "user",
         "content": (
