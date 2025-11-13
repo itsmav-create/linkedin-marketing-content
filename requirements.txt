@@ -1,0 +1,4 @@
+openai>=1.40.0
+yfinance>=0.2.40
+sendgrid>=6.11.0
+python-dateutil>=2.9.0
