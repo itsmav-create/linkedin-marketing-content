@@ -1,0 +1,33 @@
+name: Market Digest
+
+on:
+  schedule:
+    # Runs every day at 20:00 UTC
+    # ≈ 7am in Sydney during AEDT, 6am during AEST
+    - cron: "0 20 * * *"
+  # Lets you trigger it manually from the Actions tab
+  workflow_dispatch: {}
+
+jobs:
+  run-market-digest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run market digest
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          MARKET_DIGEST_TO: ${{ secrets.MARKET_DIGEST_TO }}
+          MARKET_DIGEST_FROM: ${{ secrets.MARKET_DIGEST_FROM }}
+        run: python market_digest.py
