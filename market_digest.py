@@ -12,31 +12,31 @@ from openai import OpenAI
 
 WATCHLIST = [
     # ASX ETFs
-    "VAS.AX",   # Aus shares
-    "VGS.AX",   # Global shares
-    "VGE.AX",   # Emerging markets
-    "NDQ.AX",   # Nasdaq 100 (AU)
-    "IVV.AX",   # S&P 500 (AU)
-    "STW.AX",   # ASX 200
+    "VAS.AX",
+    "VGS.AX",
+    "VGE.AX",
+    "NDQ.AX",
+    "IVV.AX",
+    "STW.AX",
 
     # AU large caps
-    "TLS.AX",   # Telstra
-    "CBA.AX",   # CBA
-    "BHP.AX",   # BHP
-    "RIO.AX",   # Rio Tinto
-    "WES.AX",   # Wesfarmers
-    "CSL.AX",   # CSL
-    "XRO.AX",   # Xero
+    "TLS.AX",
+    "CBA.AX",
+    "BHP.AX",
+    "RIO.AX",
+    "WES.AX",
+    "CSL.AX",
+    "XRO.AX",
 
-    # US / global ETFs & sectors
-    "QQQ",      # Nasdaq 100
-    "SPY",      # S&P 500
-    "XLK",      # Tech
-    "XLF",      # Financials
-    "XLE",      # Energy
-    "XLU",      # Utilities
-    "SMH",      # Semiconductors
-    "VNQ",      # REITs
+    # US/global ETFs
+    "QQQ",
+    "SPY",
+    "XLK",
+    "XLF",
+    "XLE",
+    "XLU",
+    "SMH",
+    "VNQ",
 
     # US big tech
     "NVDA",
@@ -47,27 +47,21 @@ WATCHLIST = [
     "META",
 ]
 
-# Only highlight moves above these thresholds
 MIN_DAILY_MOVE_PCT = 2.0
 MIN_WEEKLY_MOVE_PCT = 5.0
 
 MODEL_NAME = "gpt-4.1-mini"
 
+
 # ---------------------------------------------------------
 # DATA FETCHING
 # ---------------------------------------------------------
 
-
 def fetch_market_data(tickers):
-    """
-    Fetch latest price & performance using yfinance.
-    Returns list of dicts with:
-    ticker, name, price, day_change_pct, week_change_pct
-    """
     end = datetime.now(timezone.utc)
-    start = end - timedelta(days=10)  # enough for 1-week lookback
+    start = end - timedelta(days=10)
 
-    data = []
+    results = []
 
     for ticker in tickers:
         try:
@@ -77,55 +71,84 @@ def fetch_market_data(tickers):
             if hist.empty or len(hist) < 2:
                 continue
 
-            latest_row = hist.iloc[-1]
-            prev_row = hist.iloc[-2]
+            latest = hist.iloc[-1]
+            prev = hist.iloc[-2]
 
-            price = float(latest_row["Close"])
-            prev_price = float(prev_row["Close"])
-
+            price = float(latest["Close"])
+            prev_price = float(prev["Close"])
             day_change_pct = ((price - prev_price) / prev_price) * 100
 
-            # Weekly move (approx 5 trading days back)
             if len(hist) >= 6:
                 week_price = float(hist.iloc[-6]["Close"])
             else:
                 week_price = float(hist.iloc[0]["Close"])
-
             week_change_pct = ((price - week_price) / week_price) * 100
 
             info = t.info if hasattr(t, "info") else {}
             name = info.get("shortName") or info.get("longName") or ticker
 
-            data.append(
-                {
-                    "ticker": ticker,
-                    "name": name,
-                    "price": round(price, 2),
-                    "day_change_pct": round(day_change_pct, 2),
-                    "week_change_pct": round(week_change_pct, 2),
-                }
-            )
-
+            results.append({
+                "ticker": ticker,
+                "name": name,
+                "price": round(price, 2),
+                "day_change_pct": round(day_change_pct, 2),
+                "week_change_pct": round(week_change_pct, 2),
+            })
         except Exception as e:
             print(f"Error fetching {ticker}: {e}")
 
-    return data
+    return results
 
 
 def filter_significant_moves(market_data):
-    """
-    Filter for instruments that have meaningful moves.
-    """
-    significant = []
+    return [
+        item for item in market_data
+        if abs(item["day_change_pct"]) >= MIN_DAILY_MOVE_PCT
+        or abs(item["week_change_pct"]) >= MIN_WEEKLY_MOVE_PCT
+    ]
+
+
+# ---------------------------------------------------------
+# AI PROMPT BUILDER
+# ---------------------------------------------------------
+
+def build_ai_prompt(market_data, significant):
+    today = datetime.now().strftime("%d %b %Y")
+
+    snapshot_lines = []
+    snapshot_lines.append(f"Date: {today}\n")
+    snapshot_lines.append("WATCHLIST SNAPSHOT:")
+
     for item in market_data:
-        if (
-            abs(item["day_change_pct"]) >= MIN_DAILY_MOVE_PCT
-            or abs(item["week_change_pct"]) >= MIN_WEEKLY_MOVE_PCT
-        ):
-            significant.append(item)
-    return significant
+        snapshot_lines.append(
+            f"- {item['ticker']} ({item['name']}): Price {item['price']}, "
+            f"Day {item['day_change_pct']}%, Week {item['week_change_pct']}%"
+        )
 
+    snapshot_lines.append("\nSIGNIFICANT MOVES:")
+    if significant:
+        for item in significant:
+            snapshot_lines.append(
+                f"- {item['ticker']} ({item['name']}): "
+                f"Day {item['day_change_pct']}%, Week {item['week_change_pct']}%"
+            )
+    else:
+        snapshot_lines.append("- None")
 
-def build_ai_prompt(market_data, significant_moves):
-    """
-    Build a prompt for OpenAI with a more directional, CIO-style tone:
+    snapshot_text = "\n".join(snapshot_lines)
+
+    system_msg = (
+        "You are an investment research assistant for a senior marketing and commercial leader. "
+        "He thinks like a CIO: in themes, risk, and capital allocation. "
+        "This is a DAILY briefing—focus on directional tone, near-term rotations, "
+        "accumulation vs de-risking, leadership vs fatigue. "
+        "Never give buy/sell advice. Use language like: accumulation trend, fatigue, "
+        "rotation out of, momentum building, de-risking zone, structural uptrend."
+    )
+
+    user_msg = f"""
+Below is the snapshot of the full watchlist.
+
+{snapshot_text}
+
+Write a DAILY CIO-style market pulse using this structure
