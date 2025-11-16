@@ -1,9 +1,11 @@
-name: LinkedIn Content Digest   # ← gives it a proper name in Actions
+name: LinkedIn Content Digest
 
 on:
+  # Scheduled run (Sundays 22:00 UTC ≈ Mon 9am Sydney during AEDT)
   schedule:
-    - cron: "0 22 * * 0"       # Sundays 22:00 UTC (~Mon 9am Sydney). Change if you like.
-  workflow_dispatch: {}         # ← enables the “Run workflow” button
+    - cron: "0 22 * * 0"
+  # Manual trigger from Actions → “Run workflow”
+  workflow_dispatch: {}
 
 jobs:
   li-digest:
@@ -13,17 +15,19 @@ jobs:
 
     steps:
       - name: Check out repo
+      # pulls your code so the runner can execute ai.digest.py
         uses: actions/checkout@v4
 
-- name: Set up Python
-  uses: actions/setup-python@v5
-  with:
-    python-version: "3.11"
-    cache: "pip"
-    cache-dependency-path: requirements.txt
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
 
       - name: Run LinkedIn Digest
         env:
@@ -31,4 +35,4 @@ jobs:
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
           LI_CONTENT_EMAIL: ${{ secrets.LI_CONTENT_EMAIL }}
           MARKET_DIGEST_FROM: ${{ secrets.MARKET_DIGEST_FROM }}
-        run: python ai.digest.py   # ← matches your filename (with the dot)
+        run: python ai.digest.py   # if you renamed it to ai_digest.py, change this line
