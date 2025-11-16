@@ -2,28 +2,28 @@
 # Sunday LinkedIn Content Pack for Marmik Vyas
 # Curates 5–6 executive-level insights weekly (AI, marketing, GTM, business strategy)
 # Sources: 20+ RSS feeds with automatic backups if fewer than 6 valid picks
-# Runs weekly at 9pm Sydney (guarded), delivered by SendGrid via GitHub Actions
+# Runs weekly (guarded for 21:00 Sydney on schedule), delivered by SendGrid API via GitHub Actions
 
 import os
 import json
-import smtplib
-from email.mime.text import MIMEText
+from email.utils import formatdate
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
-from openai import OpenAI
+
 import feedparser
 from dateutil import parser as dateparser
+from openai import OpenAI
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 
 # ======== ENVIRONMENT CONFIG ========
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.sendgrid.net")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-FROM_EMAIL = os.getenv("FROM_EMAIL", SMTP_USER)
-RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL")
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
+FROM_EMAIL = os.getenv("MARKET_DIGEST_FROM")      # verified sender (e.g., itsmav@gmail.com)
+RECIPIENT_EMAIL = os.getenv("LI_CONTENT_EMAIL")    # destination (your Yahoo)
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "14"))
+# Only enforce the 9pm Sydney guard on scheduled runs; the workflow sets this false for manual runs
 ENFORCE_SYDNEY_21H = os.getenv("ENFORCE_SYDNEY_21H", "true").lower() in ("1", "true", "yes")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -56,16 +56,16 @@ RSS_FEEDS = [
 # ======== BACKUP FEEDS ========
 
 BACKUP_FEEDS = [
-    "https://www.fastcompany.com/rss",                     # innovation / leadership
-    "https://techcrunch.com/feed/",                        # business tech
-    "https://www.cmo.com/rss",                             # Adobe CMO.com
-    "https://www.socialmediatoday.com/rss.xml",            # social trends
+    "https://www.fastcompany.com/rss",
+    "https://techcrunch.com/feed/",
+    "https://www.cmo.com/rss",
+    "https://www.socialmediatoday.com/rss.xml",
     "https://www.forbes.com/leadership/feed/",
     "https://fortune.com/feed/",
-    "https://www.inc.com/rss",                             # entrepreneurship
+    "https://www.inc.com/rss",
     "https://www.marketingdive.com/feeds/news/",
-    "https://www.smartcompany.com.au/feed/",               # ANZ SME focus
-    "https://medium.com/feed/@briansolis",                 # thought leadership
+    "https://www.smartcompany.com.au/feed/",
+    "https://medium.com/feed/@briansolis",
 ]
 
 
@@ -84,6 +84,7 @@ def fetch_recent_articles(feeds):
         if not getattr(feed, "entries", None):
             print(f"ℹ️ Empty feed: {feed_url}")
             continue
+
         for entry in feed.entries:
             pub_date = None
             for k in ("published", "updated", "created"):
@@ -99,10 +100,12 @@ def fetch_recent_articles(feeds):
                 pub_date = pub_date.replace(tzinfo=timezone.utc)
             if pub_date < cutoff:
                 continue
-            title = entry.get("title", "").strip()
-            url = entry.get("link", "").strip()
+
+            title = (entry.get("title") or "").strip()
+            url = (entry.get("link") or "").strip()
             if not title or not url:
                 continue
+
             articles.append({
                 "title": title,
                 "url": url,
@@ -110,7 +113,8 @@ def fetch_recent_articles(feeds):
                 "published": pub_date.isoformat(),
                 "source": feed.get("feed", {}).get("title", feed_url)
             })
-    # deduplicate
+
+    # Deduplicate by URL and sort newest first
     seen = set()
     deduped = []
     for a in sorted(articles, key=lambda x: x["published"], reverse=True):
@@ -126,23 +130,20 @@ def select_and_enrich_articles(articles):
     if not articles:
         return []
 
-    system_prompt = """
-You are the AI Content Strategist for Marmik Vyas — a senior marketing and commercial leader (ex-Ogilvy, Dell, Lenovo, nbn, ALAT).
-Your job is to find thought-worthy business and marketing ideas for LinkedIn posts that appeal to senior leaders.
-
-Audience:
-- CEOs, CMOs, Growth Heads, Product/Digital/CX leaders, Investors.
-Focus on:
-- AI in marketing & business transformation
-- Marketing effectiveness & GTM strategy
-- Customer experience, retention, performance loops
-- Org design, leadership, and transformation insights.
-
-Exclude:
-- Basic how-tos, shallow AI hype, tools lists, or clickbait.
-Tone:
-- Edgy but professional, insight-rich, commercial, and concise.
-""".strip()
+    system_prompt = (
+        "You are the AI Content Strategist for Marmik Vyas — a senior marketing and commercial leader "
+        "(ex-Ogilvy, Dell, Lenovo, nbn, ALAT). Your job is to find thought-worthy business and marketing ideas "
+        "for LinkedIn posts that appeal to senior leaders.\n\n"
+        "Audience:\n"
+        "- CEOs, CMOs, Growth Heads, Product/Digital/CX leaders, Investors.\n"
+        "Focus on:\n"
+        "- AI in marketing & business transformation\n"
+        "- Marketing effectiveness & GTM strategy\n"
+        "- Customer experience, retention, performance loops\n"
+        "- Org design, leadership, and transformation insights.\n\n"
+        "Exclude: basic how-tos, shallow AI hype, tools lists, clickbait. "
+        "Tone: edgy but professional, insight-rich, commercial, concise."
+    )
 
     user_content = (
         "From these recent articles, pick 5–6 that match the brief above. "
@@ -198,10 +199,12 @@ def build_email_html(curated):
           </td>
         </tr>
         """)
+    sent_date = formatdate(localtime=True)
     return f"""
     <html>
       <body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">
         <h2>Sunday LinkedIn Content Pack</h2>
+        <p style="color:#555;margin-top:-6px;">Generated {sent_date}</p>
         <p>Curated from 20+ business, marketing & AI sources. Tailored for your C-level network.</p>
         <table width="100%" cellspacing="0" cellpadding="0">
           {''.join(rows)}
@@ -211,24 +214,31 @@ def build_email_html(curated):
     """
 
 
-# ======== SEND MAIL ========
+# ======== SEND MAIL (SendGrid API) ========
 
 def send_email(subject, html_body):
-    msg = MIMEText(html_body, "html")
-    msg["Subject"] = subject
-    msg["From"] = FROM_EMAIL
-    msg["To"] = RECIPIENT_EMAIL
+    if not SENDGRID_API_KEY:
+        raise RuntimeError("SENDGRID_API_KEY missing")
+    if not FROM_EMAIL:
+        raise RuntimeError("MARKET_DIGEST_FROM (verified sender) missing")
+    if not RECIPIENT_EMAIL:
+        raise RuntimeError("LI_CONTENT_EMAIL (recipient) missing")
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-        server.starttls()
-        server.login(SMTP_USER, SMTP_PASSWORD)
-        server.send_message(msg)
-    print(f"✅ Email sent to {RECIPIENT_EMAIL} via {SMTP_HOST}")
+    msg = Mail(
+        from_email=FROM_EMAIL,
+        to_emails=[e.strip() for e in RECIPIENT_EMAIL.split(",") if e.strip()],
+        subject=subject,
+        html_content=html_body
+    )
+    sg = SendGridAPIClient(SENDGRID_API_KEY)
+    resp = sg.send(msg)
+    print(f"SENDGRID_STATUS {resp.status_code} to={RECIPIENT_EMAIL}")
 
 
 # ======== MAIN ========
 
 def main():
+    # Guard: only enforce 21:00 Sydney for scheduled runs (workflow sets ENV accordingly)
     if ENFORCE_SYDNEY_21H:
         now_syd = datetime.now(ZoneInfo("Australia/Sydney"))
         if now_syd.hour != 21:
@@ -237,13 +247,10 @@ def main():
 
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY missing")
-    if not SMTP_USER or not SMTP_PASSWORD:
-        raise RuntimeError("SMTP credentials missing")
 
     primary = fetch_recent_articles(RSS_FEEDS)
     curated = select_and_enrich_articles(primary)
 
-    # fallback if fewer than 6 curated
     if len(curated) < 5:
         print("⚠️ Fewer than 5 curated results – fetching backup feeds.")
         backup = fetch_recent_articles(BACKUP_FEEDS)
