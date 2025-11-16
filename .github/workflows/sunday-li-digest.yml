@@ -1,10 +1,10 @@
 name: LinkedIn Content Digest
 
 on:
-  # Scheduled run (Sundays 22:00 UTC ≈ Mon 9am Sydney during AEDT)
+  # Auto: Sundays 22:00 UTC ≈ Monday 9:00 Sydney (AEDT). Adjust if needed.
   schedule:
     - cron: "0 22 * * 0"
-  # Manual trigger from Actions → “Run workflow”
+  # Manual trigger from the Actions tab
   workflow_dispatch: {}
 
 jobs:
@@ -15,7 +15,6 @@ jobs:
 
     steps:
       - name: Check out repo
-      # pulls your code so the runner can execute ai.digest.py
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -26,14 +25,16 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Run LinkedIn Digest
-  env:
-    OPENAI_API_KEY:     ${{ secrets.OPENAI_API_KEY }}
-    SENDGRID_API_KEY:   ${{ secrets.SENDGRID_API_KEY }}
-    LI_CONTENT_EMAIL:   ${{ secrets.LI_CONTENT_EMAIL }}     # Yahoo recipient
-    MARKET_DIGEST_FROM: ${{ secrets.MARKET_DIGEST_FROM }}   # verified SendGrid sender
-    ENFORCE_SYDNEY_21H: ${{ github.event_name == 'schedule' && 'true' || 'false' }}
-  run: python ai.digest.py
+        env:
+          # Required secrets
+          OPENAI_API_KEY:     ${{ secrets.OPENAI_API_KEY }}
+          SENDGRID_API_KEY:   ${{ secrets.SENDGRID_API_KEY }}
+          LI_CONTENT_EMAIL:   ${{ secrets.LI_CONTENT_EMAIL }}     # recipient (Yahoo)
+          MARKET_DIGEST_FROM: ${{ secrets.MARKET_DIGEST_FROM }}   # verified SendGrid sender
+
+          # Only enforce 9pm Sydney on scheduled runs; manual runs skip the guard
+          ENFORCE_SYDNEY_21H: ${{ github.event_name == 'schedule' && 'true' || 'false' }}
+        run: python ai.digest.py
