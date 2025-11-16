@@ -1,34 +1,11 @@
-name: Sunday LinkedIn Content Pack
+name: LinkedIn Content Digest
 
 on:
   schedule:
-    # Every Sunday 10:00 UTC (roughly Sunday evening AU, we can tweak later)
-    - cron: "0 10 * * 0"
-  workflow_dispatch:
+    - cron: "0 20 * * 0"   # existing schedule (example: Sundays 20:00 UTC)
+  workflow_dispatch: {}     # ← enables manual runs
 
 jobs:
-  run-digest:
+  run-li-digest:
     runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          pip install openai feedparser python-dateutil
-
-      - name: Run digest script
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
-        run: |
-          ls
-          python ai.digest.py
+    ...
