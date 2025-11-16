@@ -30,9 +30,10 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run LinkedIn Digest
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
-          LI_CONTENT_EMAIL: ${{ secrets.LI_CONTENT_EMAIL }}
-          MARKET_DIGEST_FROM: ${{ secrets.MARKET_DIGEST_FROM }}
-        run: python ai.digest.py   # if you renamed it to ai_digest.py, change this line
+  env:
+    OPENAI_API_KEY:     ${{ secrets.OPENAI_API_KEY }}
+    SENDGRID_API_KEY:   ${{ secrets.SENDGRID_API_KEY }}
+    LI_CONTENT_EMAIL:   ${{ secrets.LI_CONTENT_EMAIL }}     # Yahoo recipient
+    MARKET_DIGEST_FROM: ${{ secrets.MARKET_DIGEST_FROM }}   # verified SendGrid sender
+    ENFORCE_SYDNEY_21H: ${{ github.event_name == 'schedule' && 'true' || 'false' }}
+  run: python ai.digest.py
