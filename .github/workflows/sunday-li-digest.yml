@@ -2,10 +2,29 @@ name: LinkedIn Content Digest
 
 on:
   schedule:
-    - cron: "0 20 * * 0"   # existing schedule (example: Sundays 20:00 UTC)
-  workflow_dispatch: {}     # ← enables manual runs
+    - cron: "0 22 * * 0"   # (example: Sundays 9am Sydney)
+  workflow_dispatch: {}     # ← ADD THIS LINE
 
 jobs:
   run-li-digest:
     runs-on: ubuntu-latest
-    ...
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run LinkedIn Digest
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          LI_CONTENT_EMAIL: ${{ secrets.LI_CONTENT_EMAIL }}
+        run: python ai_digest.py
