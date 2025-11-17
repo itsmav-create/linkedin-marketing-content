@@ -1,34 +1,51 @@
 # ai.digest.py
 # Sunday LinkedIn Content Pack for Marmik Vyas
-# Curates 5–6 executive-level insights weekly (AI, marketing, GTM, business strategy)
-# Sources: 20+ RSS feeds with automatic backups if fewer than 6 valid picks
-# Runs weekly (guarded for 21:00 Sydney on schedule), delivered by SendGrid API via GitHub Actions
+# Curates 5–6 executive-level insights (AI, marketing, GTM, leadership)
+# Uses RSS + OpenAI + SendGrid API. Optimized for speed with timeouts, caps, and diagnostics.
 
 import os
 import json
+import time
 from email.utils import formatdate
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import requests
 import feedparser
 from dateutil import parser as dateparser
 from openai import OpenAI
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
-# ======== ENVIRONMENT CONFIG ========
+# ======== ENV / KNOBS ========
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
-FROM_EMAIL = os.getenv("MARKET_DIGEST_FROM")      # verified sender (e.g., itsmav@gmail.com)
-RECIPIENT_EMAIL = os.getenv("LI_CONTENT_EMAIL")    # destination (your Yahoo)
-LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "90"))
-# Only enforce the 9pm Sydney guard on scheduled runs; the workflow sets this false for manual runs
+
+FROM_EMAIL = os.getenv("MARKET_DIGEST_FROM")        # verified SendGrid sender (e.g., itsmav@gmail.com)
+RECIPIENT_EMAIL = os.getenv("LI_CONTENT_EMAIL")      # destination (e.g., your Yahoo)
+
+# Lookback & guard
+LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "14"))        # change via workflow env
 ENFORCE_SYDNEY_21H = os.getenv("ENFORCE_SYDNEY_21H", "true").lower() in ("1", "true", "yes")
 
+# Performance controls (override via workflow env if needed)
+FEED_HTTP_TIMEOUT = int(os.getenv("FEED_HTTP_TIMEOUT", "8"))   # seconds per HTTP request
+MAX_ENTRIES_PER_FEED = int(os.getenv("MAX_ENTRIES_PER_FEED", "15"))
+MAX_ARTICLES_TOTAL = int(os.getenv("MAX_ARTICLES_TOTAL", "120"))
+MAX_TO_MODEL = int(os.getenv("MAX_TO_MODEL", "80"))
+PREFER_RECENT_DAYS = int(os.getenv("PREFER_RECENT_DAYS", "45"))
+TIMEBOX_SECONDS = int(os.getenv("TIMEBOX_SECONDS", "120"))     # overall fetch budget
+
+# Diagnostics
+DIAGNOSTICS = os.getenv("DIAGNOSTICS", "0") in ("1", "true", "True", "yes")
+IGNORE_CUTOFF = os.getenv("IGNORE_CUTOFF", "0") in ("1", "true", "True", "yes")
+
+# OpenAI
+MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# ======== PRIMARY FEEDS ========
+# ======== FEEDS ========
 
 RSS_FEEDS = [
     "https://feeds.hbr.org/harvardbusiness",
@@ -53,8 +70,6 @@ RSS_FEEDS = [
     "https://business.linkedin.com/marketing-solutions/blog.rss",
 ]
 
-# ======== BACKUP FEEDS ========
-
 BACKUP_FEEDS = [
     "https://www.fastcompany.com/rss",
     "https://techcrunch.com/feed/",
@@ -68,24 +83,38 @@ BACKUP_FEEDS = [
     "https://medium.com/feed/@briansolis",
 ]
 
-
-# ======== FETCH ========
+# ======== FETCH (fast & instrumented) ========
 
 def fetch_recent_articles(feeds):
+    start_ts = time.time()
     cutoff = datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)
     articles = []
 
+    headers = {"User-Agent": "AI-Digest/1.0 (+https://github.com/marmik)"}
+
     for feed_url in feeds:
+        if time.time() - start_ts > TIMEBOX_SECONDS:
+            print(f"⏱️ Timebox reached ({TIMEBOX_SECONDS}s). Stopping feed fetch.")
+            break
+
         try:
-            feed = feedparser.parse(feed_url)
+            resp = requests.get(feed_url, headers=headers, timeout=FEED_HTTP_TIMEOUT)
+            resp.raise_for_status()
+            feed = feedparser.parse(resp.content)
         except Exception as e:
-            print(f"⚠️ Error parsing feed {feed_url}: {e}")
+            print(f"⚠️ Fetch/parse error {feed_url}: {e}")
             continue
-        if not getattr(feed, "entries", None):
+
+        entries = getattr(feed, "entries", []) or []
+        if DIAGNOSTICS:
+            print(f"🔎 Feed ok: {feed_url} → entries={len(entries)}")
+
+        if not entries:
             print(f"ℹ️ Empty feed: {feed_url}")
             continue
 
-        for entry in feed.entries:
+        kept_here = 0
+        for entry in entries[:MAX_ENTRIES_PER_FEED]:
             pub_date = None
             for k in ("published", "updated", "created"):
                 if k in entry:
@@ -98,7 +127,8 @@ def fetch_recent_articles(feeds):
                 pub_date = datetime.now(timezone.utc)
             if not pub_date.tzinfo:
                 pub_date = pub_date.replace(tzinfo=timezone.utc)
-            if pub_date < cutoff:
+
+            if not IGNORE_CUTOFF and pub_date < cutoff:
                 continue
 
             title = (entry.get("title") or "").strip()
@@ -109,22 +139,39 @@ def fetch_recent_articles(feeds):
             articles.append({
                 "title": title,
                 "url": url,
-                "summary": (entry.get("summary", "") or "")[:600],
+                "summary": (entry.get("summary", "") or "")[:280],  # shorter = fewer tokens
                 "published": pub_date.isoformat(),
                 "source": feed.get("feed", {}).get("title", feed_url)
             })
+            kept_here += 1
+            if DIAGNOSTICS and kept_here <= 3:
+                print(f"   • KEEP: {title[:100]}")
 
-    # Deduplicate by URL and sort newest first
+        if DIAGNOSTICS:
+            print(f"   → kept {kept_here} (LOOKBACK_DAYS={LOOKBACK_DAYS}, IGNORE_CUTOFF={IGNORE_CUTOFF})")
+
+        if len(articles) >= MAX_ARTICLES_TOTAL:
+            print(f"🔪 Reached MAX_ARTICLES_TOTAL={MAX_ARTICLES_TOTAL}.")
+            break
+
+    # Deduplicate (by URL) & sort newest first
     seen = set()
     deduped = []
     for a in sorted(articles, key=lambda x: x["published"], reverse=True):
         if a["url"] not in seen:
             seen.add(a["url"])
             deduped.append(a)
-    return deduped
 
+    # Prefer recent, then older, cap total passed to model
+    prefer_cut = datetime.now(timezone.utc) - timedelta(days=PREFER_RECENT_DAYS)
+    recent = [a for a in deduped if dateparser.parse(a["published"]) >= prefer_cut]
+    older  = [a for a in deduped if dateparser.parse(a["published"]) <  prefer_cut]
+    shortlisted = (recent[:MAX_TO_MODEL] if len(recent) >= 5 else (recent + older))[:MAX_TO_MODEL]
 
-# ======== CURATE VIA OPENAI ========
+    print(f"📦 Totals: fetched={len(articles)} deduped={len(deduped)} shortlisted={len(shortlisted)}")
+    return shortlisted
+
+# ======== CURATE VIA OPENAI (with fallback) ========
 
 def select_and_enrich_articles(articles):
     if not articles:
@@ -132,17 +179,14 @@ def select_and_enrich_articles(articles):
 
     system_prompt = (
         "You are the AI Content Strategist for Marmik Vyas — a senior marketing and commercial leader "
-        "(ex-Ogilvy, Dell, Lenovo, nbn, ALAT). Your job is to find thought-worthy business and marketing ideas "
-        "for LinkedIn posts that appeal to senior leaders.\n\n"
-        "Audience:\n"
-        "- CEOs, CMOs, Growth Heads, Product/Digital/CX leaders, Investors.\n"
-        "Focus on:\n"
-        "- AI in marketing & business transformation\n"
-        "- Marketing effectiveness & GTM strategy\n"
-        "- Customer experience, retention, performance loops\n"
-        "- Org design, leadership, and transformation insights.\n\n"
-        "Exclude: basic how-tos, shallow AI hype, tools lists, clickbait. "
-        "Tone: edgy but professional, insight-rich, commercial, concise."
+        "(ex-Ogilvy, Dell, Lenovo, nbn, ALAT). Find thought-worthy business & marketing ideas for LinkedIn "
+        "that appeal to senior leaders.\n\n"
+        "Audience: CEOs, CMOs, Growth, Product/Digital/CX leaders, Investors.\n"
+        "Focus: AI in marketing & transformation; marketing effectiveness & GTM; CX/retention/performance loops; "
+        "org design, leadership & change.\n"
+        "Exclude: basic how-tos, shallow AI hype, tools lists, clickbait.\n"
+        "Tone: edgy, professional, commercial, concise.\n"
+        "Prefer pieces from the last 4–6 weeks for freshness, but include older if the strategic insight is exceptional."
     )
 
     user_content = (
@@ -157,27 +201,38 @@ def select_and_enrich_articles(articles):
         "\"hook\": \"Max 20-word scroll-stopping line.\", "
         "\"li_post\": \"80–140 word post in Marmik’s tone: tension → insight → POV → question.\""
         "}]\n\n"
-        f"ARTICLES:\n{json.dumps(articles[:100])}"
+        f"ARTICLES:\n{json.dumps(articles[:MAX_TO_MODEL])}"
     )
 
-    resp = client.chat.completions.create(
-        model="gpt-4o-mini",
-        temperature=0.25,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content}
-        ]
-    )
-
-    raw = resp.choices[0].message.content
     try:
+        resp = client.chat.completions.create(
+            model=MODEL_NAME,
+            temperature=0.25,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content}
+            ]
+        )
+        raw = resp.choices[0].message.content
         parsed = json.loads(raw)
-        return parsed[:6]
-    except Exception:
-        print("⚠️ Model output not valid JSON. Raw output:")
-        print(raw)
-        return []
-
+        if isinstance(parsed, list) and parsed:
+            return parsed[:6]
+        raise ValueError("Parsed JSON empty or not a list")
+    except Exception as e:
+        print(f"⚠️ Model output not valid JSON or selection failed: {e}")
+        # Fallback: ensure we always produce something
+        fallback = []
+        for a in articles[:6]:
+            fallback.append({
+                "title": a["title"],
+                "url": a["url"],
+                "published": a["published"],
+                "primary_audience": "Multi",
+                "why_it_matters": "High-signal piece for leaders.",
+                "hook": a["title"][:80],
+                "li_post": f"{a['title']} — worth a read. What’s your take on this trend?"
+            })
+        return fallback
 
 # ======== EMAIL BUILDER ========
 
@@ -213,8 +268,7 @@ def build_email_html(curated):
     </html>
     """
 
-
-# ======== SEND MAIL (SendGrid API) ========
+# ======== SEND (SendGrid API) ========
 
 def send_email(subject, html_body):
     if not SENDGRID_API_KEY:
@@ -234,11 +288,10 @@ def send_email(subject, html_body):
     resp = sg.send(msg)
     print(f"SENDGRID_STATUS {resp.status_code} to={RECIPIENT_EMAIL}")
 
-
 # ======== MAIN ========
 
 def main():
-    # Guard: only enforce 21:00 Sydney for scheduled runs (workflow sets ENV accordingly)
+    # Only enforce 21:00 Sydney on scheduled runs (workflow sets ENFORCE_SYDNEY_21H=false for manual)
     if ENFORCE_SYDNEY_21H:
         now_syd = datetime.now(ZoneInfo("Australia/Sydney"))
         if now_syd.hour != 21:
@@ -248,9 +301,11 @@ def main():
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY missing")
 
+    # Primary
     primary = fetch_recent_articles(RSS_FEEDS)
     curated = select_and_enrich_articles(primary)
 
+    # Fallback to backups if needed
     if len(curated) < 5:
         print("⚠️ Fewer than 5 curated results – fetching backup feeds.")
         backup = fetch_recent_articles(BACKUP_FEEDS)
@@ -259,7 +314,6 @@ def main():
 
     html = build_email_html(curated)
     send_email("Marmik | Sunday LinkedIn Content Pack", html)
-
 
 if __name__ == "__main__":
     main()
