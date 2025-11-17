@@ -1,7 +1,8 @@
 # ai.digest.py
 # Sunday LinkedIn Content Pack for Marmik Vyas
 # Curates 5–6 executive-level insights (AI, marketing, GTM, leadership)
-# Uses RSS + OpenAI + SendGrid API. Optimized for speed with timeouts, caps, and diagnostics.
+# Uses RSS + OpenAI + SendGrid API. Optimized with timeouts, caps, and diagnostics.
+# Default lookback: 90 days.
 
 import os
 import json
@@ -26,10 +27,10 @@ FROM_EMAIL = os.getenv("MARKET_DIGEST_FROM")        # verified SendGrid sender (
 RECIPIENT_EMAIL = os.getenv("LI_CONTENT_EMAIL")      # destination (e.g., your Yahoo)
 
 # Lookback & guard
-LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "365"))        # change via workflow env
+LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "90"))       # ← default now 90 days
 ENFORCE_SYDNEY_21H = os.getenv("ENFORCE_SYDNEY_21H", "true").lower() in ("1", "true", "yes")
 
-# Performance controls (override via workflow env if needed)
+# Performance controls (tuned defaults; can override via env if ever needed)
 FEED_HTTP_TIMEOUT = int(os.getenv("FEED_HTTP_TIMEOUT", "8"))   # seconds per HTTP request
 MAX_ENTRIES_PER_FEED = int(os.getenv("MAX_ENTRIES_PER_FEED", "15"))
 MAX_ARTICLES_TOTAL = int(os.getenv("MAX_ARTICLES_TOTAL", "120"))
@@ -291,7 +292,7 @@ def send_email(subject, html_body):
 # ======== MAIN ========
 
 def main():
-    # Only enforce 21:00 Sydney on scheduled runs (workflow sets ENFORCE_SYDNEY_21H=false for manual)
+    # Only enforce 21:00 Sydney on scheduled runs (workflow should set ENFORCE_SYDNEY_21H=false for manual)
     if ENFORCE_SYDNEY_21H:
         now_syd = datetime.now(ZoneInfo("Australia/Sydney"))
         if now_syd.hour != 21:
@@ -301,11 +302,11 @@ def main():
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY missing")
 
-    # Primary
+    # Primary pass
     primary = fetch_recent_articles(RSS_FEEDS)
     curated = select_and_enrich_articles(primary)
 
-    # Fallback to backups if needed
+    # Fallback with backups if needed
     if len(curated) < 5:
         print("⚠️ Fewer than 5 curated results – fetching backup feeds.")
         backup = fetch_recent_articles(BACKUP_FEEDS)
