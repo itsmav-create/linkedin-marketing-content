@@ -22,7 +22,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 FROM_EMAIL = os.getenv("MARKET_DIGEST_FROM")      # verified sender (e.g., itsmav@gmail.com)
 RECIPIENT_EMAIL = os.getenv("LI_CONTENT_EMAIL")    # destination (your Yahoo)
-LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "14"))
+LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "90"))
 # Only enforce the 9pm Sydney guard on scheduled runs; the workflow sets this false for manual runs
 ENFORCE_SYDNEY_21H = os.getenv("ENFORCE_SYDNEY_21H", "true").lower() in ("1", "true", "yes")
 
