@@ -26,7 +26,7 @@ FROM_EMAIL = os.getenv("MARKET_DIGEST_FROM")        # verified SendGrid sender (
 RECIPIENT_EMAIL = os.getenv("LI_CONTENT_EMAIL")      # destination (e.g., your Yahoo)
 
 # Lookback & guard
-LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "14"))        # change via workflow env
+LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "365"))        # change via workflow env
 ENFORCE_SYDNEY_21H = os.getenv("ENFORCE_SYDNEY_21H", "true").lower() in ("1", "true", "yes")
 
 # Performance controls (override via workflow env if needed)
