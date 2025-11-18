@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # ai.digest.py
 # Sunday LinkedIn Content Pack for Marmik Vyas
 # Curates 10 executive-level insights (AI, marketing, GTM, leadership)
@@ -421,7 +422,7 @@ def send_email(subject: str, html_content: str) -> None:
     try:
         sg = SendGridAPIClient(api_key)
         response = sg.send(message)
-        print(f✉️ Email sent: status={response.status_code}")
+        print(f"✉️ Email sent: status={response.status_code}")
     except Exception as e:
         print(f"❌ Error sending email via SendGrid: {e}")
 
