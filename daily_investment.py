@@ -35,6 +35,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 MARKET_UNIVERSE = {
     "Indices": ["SPY", "QQQ"],          # US equity proxies
     "Sectors": ["XLK", "XLF", "XLE"],   # Tech, Financials, Energy
+    "AIInfra": ["SOXX", "SMH", "AIQ", "BOTZ"],  # AI / Semis / Robotics & AI
     "FX": ["AUDUSD"],                   # FX pair for AUD
     "Crypto": ["BTC", "ETH"],           # Crypto majors
 }
@@ -223,13 +224,18 @@ def build_market_snapshot():
     snapshot = {
         "indices": [],
         "sectors": [],
+        "ai_infra": [],
         "fx": [],
         "crypto": [],
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    # Indices & sectors
-    for group_name, key in [("indices", "Indices"), ("sectors", "Sectors")]:
+    # Indices, sectors, AI infra ETFs
+    for group_name, key in [
+        ("indices", "Indices"),
+        ("sectors", "Sectors"),
+        ("ai_infra", "AIInfra"),
+    ]:
         for symbol in MARKET_UNIVERSE.get(key, []):
             price = get_tiingo_price(symbol)
             rsi = get_alpha_rsi(symbol)
@@ -260,28 +266,58 @@ def build_market_snapshot():
     return snapshot
 
 
-# ========= OPENAI SUMMARY ==========
+# ========= OPENAI SUMMARY (HYBRID CIO STYLE) ==========
 
 def build_openai_summary(snapshot):
     system_prompt = (
         "You are the Chief Investment Strategist for Marmik Vyas. "
-        "You analyse multi-asset data (equities, sectors, FX, crypto) and express it like a CIO. "
-        "Focus on themes: risk-on vs risk-off, rotations, accumulation vs de-risking, "
-        "macro pressure points. Do NOT give specific buy/sell recommendations."
+        "Write like a CIO who thinks in signals, scenarios, and sector themes. "
+        "Blend three perspectives:\n"
+        "1) SIGNALS → momentum, accumulation, RSI tone, rotation, fatigue.\n"
+        "2) IF–THEN SCENARIOS → what assets typically do if macro triggers move.\n"
+        "3) THEMES → structural narratives (AI infra, rates, energy, consumer resilience).\n\n"
+        "STRICT RULES:\n"
+        "- Do NOT give explicit buy/sell/hold recommendations.\n"
+        "- Do NOT suggest portfolio weights or personalised financial advice.\n"
+        "- Speak in CIO-style language: accumulation, fatigue, risk-on, risk-off, reversal tone, rotation.\n"
+        "- Your job is to make the data INTERPRETABLE and ACTIONABLE without crossing compliance boundaries."
     )
 
     user_prompt = (
-        "Using the following JSON snapshot, write an HTML-ready daily briefing with sections:\n"
-        "1) Market Mood (1–2 bullets)\n"
-        "2) Indices & Sectors (3–5 bullets: leadership, laggards, rotations)\n"
-        "3) FX & Macro (1–3 bullets, especially AUDUSD implications)\n"
-        "4) Crypto (1–3 bullets on direction & risk tone)\n"
-        "5) Watchlist Ideas (3–5 bullets phrased as 'If you believe X, you might watch Y').\n\n"
-        "Strict rules:\n"
-        "- Under 500 words.\n"
-        "- No explicit financial advice or personalised recommendations.\n"
-        "- Tone: edgy, commercial, CIO-level, mobile-friendly.\n\n"
-        f"MARKET_SNAPSHOT_JSON:\n{json.dumps(snapshot)}"
+        "Using the following JSON snapshot, write an HTML-ready daily investment briefing with this exact structure:\n\n"
+
+        "1) MARKET MOOD (Signals Overview)\n"
+        "- 2–3 bullets summarising risk-on/off tone, momentum, broad rotations.\n"
+        "- Mention where strength/fatigue is building.\n\n"
+
+        "2) SIGNALS ACROSS INDICES, SECTORS & AI INFRA\n"
+        "- 4–6 bullets highlighting leadership, laggards, accumulation vs exhaustion.\n"
+        "- Explicitly call out AI infra ETFs (SOXX, SMH, AIQ, BOTZ) where relevant.\n"
+        "- Include RSI tone where relevant (overbought/oversold only as descriptive, not advisory).\n\n"
+
+        "3) IF–THEN SETUPS (Scenarios)\n"
+        "- 3–5 bullets starting with 'If… then watch…' linking macro triggers to asset behaviour.\n"
+        "- Examples: 'If yields continue to soften, then tech, REITs, and AI infra ETFs typically strengthen.'\n"
+        "- No explicit recommendations, just behavioural logic.\n\n"
+
+        "4) THEMES → ASSET MAPPINGS\n"
+        "- 3–5 bullets mapping major themes to assets "
+        "(AI infra → SOXX/SMH/AIQ/BOTZ; USD moves → commodities; rates → growth vs cyclicals).\n"
+        "- Use directional language only.\n\n"
+
+        "5) CRYPTO AS A RISK GAUGE\n"
+        "- 1–3 bullets on BTC/ETH tone and what it signals for broader risk appetite.\n\n"
+
+        "6) TODAY’S WATCHLIST HIGHLIGHTS\n"
+        "- 3–6 bullets that give CIO-style guidance WITHOUT advice.\n"
+        "- Use phrasing like: 'areas showing accumulation tone', 'names entering fatigue zones', "
+        "'sectors or AI infra ETFs with reversal setups'.\n\n"
+
+        "STRICT STYLE:\n"
+        "- Must be under 500 words.\n"
+        "- Must be edgy, crisp, professional, mobile-friendly.\n"
+        "- NEVER give buy/sell recommendations or personalised advice.\n\n"
+        f"SNAPSHOT_DATA:\n{json.dumps(snapshot)}"
     )
 
     resp = client.chat.completions.create(
